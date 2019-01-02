@@ -938,6 +938,106 @@ NAPI_METHOD(db_get) {
 }
 
 /**
+ * Worker class for mapping keys to values.
+ */
+struct MapWorker : public BaseWorker {
+  MapWorker (napi_env env,
+             Database* database,
+             napi_value callback,
+             leveldb::Slice *keys,
+						 int keys_count,
+             bool asBuffer,
+             bool fillCache)
+    : BaseWorker(env, database, callback, "leveldown.map.do"),
+      keys_(keys),
+			keys_count_(keys_count),
+      asBuffer_(asBuffer) {
+    options_.fill_cache = fillCache;
+		values_ = new std::string[keys_count_];
+  }
+
+  virtual ~MapWorker () {
+		for (uint32_t i=0; i<keys_count_; i++) {
+			DisposeSliceBuffer(keys_[i]);
+		}
+		delete keys_;
+  }
+
+  virtual void DoExecute () {
+		for (uint32_t i=0; i<keys_count_; i++) {
+			leveldb::Status status = database_->Get(options_, keys_[i], values_[i]);
+			if (!status.ok() && !status.IsNotFound()) {
+				SetStatus(status);
+				return;
+			}
+			if (status.IsNotFound()) {
+				values_[i] = "";
+			}
+		}
+		SetStatus(leveldb::Status());
+  }
+
+  virtual void HandleOKCallback() {
+		napi_value argv[2];
+    napi_get_null(env_, &argv[0]);
+		napi_create_array_with_length (env_, keys_count_, &argv[1]);
+
+		for (size_t i=0; i<keys_count_; ++i) {
+			if (!values_[i].size()) {
+				continue;
+			}
+			napi_value value;
+			if (asBuffer_) {
+				napi_create_buffer_copy(env_, values_[i].size(), values_[i].data(), NULL, &value);
+			} else {
+				napi_create_string_utf8(env_, values_[i].data(), values_[i].size(), &value);
+			}
+			napi_set_element(env_, argv[1], static_cast<int>(i), value);
+		}
+
+    napi_value callback;
+    napi_get_reference_value(env_, callbackRef_, &callback);
+    CallFunction(env_, callback, 2, argv);
+  }
+
+  leveldb::ReadOptions options_;
+  leveldb::Slice *keys_;
+	uint32_t keys_count_;
+  //std::string value_;
+	std::string *values_;
+	bool ok_;
+  bool asBuffer_;
+};
+
+/**
+ * Maps keys to values.
+ */
+NAPI_METHOD(map_do) {
+  NAPI_ARGV(4);
+  NAPI_DB_CONTEXT();
+
+	napi_value keys = argv[1];
+  napi_value options = argv[2];
+  bool asBuffer = BooleanProperty(env, options, "asBuffer", true);
+  bool fillCache = BooleanProperty(env, options, "fillCache", true);
+  napi_value callback = argv[3];
+
+	uint32_t length;
+	napi_get_array_length (env, keys, &length);
+	leveldb::Slice *_keys = new leveldb::Slice[length];
+	for (uint32_t i=0; i<length; i++) {
+		napi_value element;
+		napi_get_element (env, keys, i, &element);
+		_keys[i] = ToSlice (env, element);
+	}
+  MapWorker* worker = new MapWorker(env, database, callback, _keys, length, asBuffer,
+                                    fillCache);
+  worker->Queue();
+
+  NAPI_RETURN_UNDEFINED();
+}
+
+/**
  * Worker class for deleting a value from a database.
  */
 struct DelWorker : public BaseWorker {
@@ -1761,6 +1861,8 @@ NAPI_INIT() {
   NAPI_EXPORT_FUNCTION(db_approximate_size);
   NAPI_EXPORT_FUNCTION(db_compact_range);
   NAPI_EXPORT_FUNCTION(db_get_property);
+
+	NAPI_EXPORT_FUNCTION(map_do);
 
   NAPI_EXPORT_FUNCTION(destroy_db);
   NAPI_EXPORT_FUNCTION(repair_db);

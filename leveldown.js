@@ -45,6 +45,27 @@ LevelDOWN.prototype._get = function (key, options, callback) {
   binding.db_get(this.context, key, options, callback)
 }
 
+LevelDOWN.prototype.map = function (keys, options, callback) {
+	if (typeof options === 'function') callback = options
+
+  if (typeof callback !== 'function') {
+    throw new Error('map() requires a callback argument')
+  }
+
+	if (!Array.isArray (keys)) {
+		throw new Error('keys argument must be an array');
+	}
+	for (var i=0; i<keys.length; i++) {
+		var err = this._checkKey (keys[i])
+		if (err) return process.nextTick(callback, err)
+		keys[i] = this._serializeKey(keys[i])
+	}
+	if (typeof options !== 'object' || options === null) options = {}
+	options.asBuffer = options.asBuffer !== false
+
+	binding.map_do(this.context, keys, options, callback)
+}
+
 LevelDOWN.prototype._del = function (key, options, callback) {
   binding.db_del(this.context, key, options, callback)
 }
